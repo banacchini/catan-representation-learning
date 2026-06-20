@@ -1,0 +1,17 @@
+================================================================
+URUCHOMIENIE GENERATORA: 5000 gier (ID od 0 do 4999)
+================================================================
+[1/5] Generowanie gier od ID 0 do 999...
+ -> Zapisano 729,041 kroków czasowych do pliku timesteps_00000_to_00999.parquet
+[2/5] Generowanie gier od ID 1000 do 1999...
+ -> Zapisano 673,182 kroków czasowych do pliku timesteps_01000_to_01999.parquet
+[3/5] Generowanie gier od ID 2000 do 2999...
+ -> Zapisano 732,752 kroków czasowych do pliku timesteps_02000_to_02999.parquet
+[4/5] Generowanie gier od ID 3000 do 3999...
+ -> Zapisano 723,214 kroków czasowych do pliku timesteps_03000_to_03999.parquet
+[5/5] Generowanie gier od ID 4000 do 4999...
+ -> Zapisano 739,677 kroków czasowych do pliku timesteps_04000_to_04999.parquet
+================================================================
+ZAKOŃCZONO: Wygenerowano gry od 0 do 4999.
+Całkowity czas pracy: 2581.4s (516 ms/gra)
+================================================================
