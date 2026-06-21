@@ -15,3 +15,71 @@ URUCHOMIENIE GENERATORA: 5000 gier (ID od 0 do 4999)
 ZAKOŃCZONO: Wygenerowano gry od 0 do 4999.
 Całkowity czas pracy: 2581.4s (516 ms/gra)
 ================================================================
+================================================================
+URUCHOMIENIE GENERATORA: 5000 gier (ID od 5000 do 9999)
+================================================================
+[1/5] Generowanie gier od ID 5000 do 5999...
+ -> Zapisano 712,023 kroków czasowych do pliku timesteps_05000_to_05999.parquet
+[2/5] Generowanie gier od ID 6000 do 6999...
+ -> Zapisano 709,733 kroków czasowych do pliku timesteps_06000_to_06999.parquet
+[3/5] Generowanie gier od ID 7000 do 7999...
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+                    ~~~~^^^^^^^^^^^^^^^
+  File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/home/dominik/projects/wust/sem1/ur/catan-representation-learning/generate_dataset_v2.py", line 248, in play_one_game
+    game.play(accumulators=[snapper])
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 148, in play
+    self.play_tick(decide_fn=decide_fn, accumulators=accumulators)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 168, in play_tick
+    else player.decide(self, self.playable_actions)
+         ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/players/mcts.py", line 30, in decide
+    root.run_simulation()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/players/mcts.py", line 69, in run_simulation
+    result = tmp.playout()
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/players/mcts.py", line 125, in playout
+    return run_playout(self.game)
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/players/playouts.py", line 73, in run_playout
+    game_copy.play(decide_fn=decide_fn)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 148, in play
+    self.play_tick(decide_fn=decide_fn, accumulators=accumulators)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 177, in play_tick
+    return self.execute(action)
+           ~~~~~~~~~~~~^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 193, in execute
+    action_record = apply_action(self.state, action, action_record)
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/apply_action.py", line 87, in apply_action
+    action_record = apply_build_settlement(state, action)
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/apply_action.py", line 158, in apply_build_settlement
+    ) = state.board.build_settlement(action.color, node_id, False)
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/models/board.py", line 132, in build_settlement
+    del self.connected_components[edge_color][b_index]
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+TypeError: list indices must be integers or slices, not NoneType
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dominik/projects/wust/sem1/ur/catan-representation-learning/generate_dataset_v2.py", line 333, in <module>
+    generate(args.num, args.out_dir, args.workers, args.chunk_size, args.start_id)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catan-representation-learning/generate_dataset_v2.py", line 294, in generate
+    results = pool.map(play_one_game, games_in_chunk)
+  File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 367, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 774, in get
+    raise self._value
+TypeError: list indices must be integers or slices, not NoneType
