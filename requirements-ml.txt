@@ -11,3 +11,7 @@ seaborn>=0.13
 tqdm>=4.66
 jupyter>=1.0
 ipykernel>=6.29
+# analiza/wizualizacja notebooka 02 (uczenie reprezentacji)
+umap-learn>=0.5.7
+statsmodels>=0.14
+shap>=0.45
