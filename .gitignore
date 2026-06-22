@@ -1,0 +1,15 @@
+# Srodowiska
+.venv/
+.venv-ml/
+__pycache__/
+*.pyc
+
+# Wyniki treningu (odtwarzalne przez src/train_all.py)
+results/
+data/splits/
+
+# Notebooki — pliki pomocnicze
+.ipynb_checkpoints/
+
+# Generatory notebookow (jednorazowe)
+build_nb_*.py

@@ -159,12 +159,77 @@ uv run split_dataset.py --data-dir data --out-dir data/splits
 # -> {train,val,test}_{timesteps,card_samples}.parquet
 ```
 
-## Modele (zakres dalszej pracy)
+## Środowisko modelowe (osobne od generatora)
+
+Część modelowa (analiza + uczenie reprezentacji) ma **własny venv `.venv-ml` na
+Pythonie 3.12** — PyTorch nie ma jeszcze wheeli na zainstalowanego systemowo
+Pythona 3.14. `catanatron` w tej części jest niepotrzebny (dane są gotowe), więc
+środowisko jest lekkie (`requirements-ml.txt`: torch CPU, pandas, pyarrow,
+scikit-learn, matplotlib, seaborn, jupyter):
+
+```bash
+python -m pip install uv
+python -m uv venv .venv-ml --python 3.12
+python -m uv pip install --python .venv-ml -r requirements-ml.txt
+```
+
+Pliki `verify_dataset.py` i `split_dataset.py` to czysty pandas/numpy — działają
+w `.venv-ml`.
+
+## Uczenie reprezentacji — implementacja (`src/`)
+
+Wspólny backbone **Transformer** (`src/models.py`: `SeqTransformerEncoder`)
+z **sinusoidalnym kodowaniem pozycji indeksowanym `action_index`** — model uczony
+na oknach długości 256 działa na pełnych sekwencjach (do ~673 kroków) przy
+ekstrakcji embeddingów. Jednostka sekwencji: `(game_id, observed_color)` sortowana
+po `action_index`. Wejście = 82 cechy numeryczne (bez meta i bez `y_*`).
+Standaryzacja cech ciągłych na statystykach TRAIN; kolumny binarne (one-hoty,
+flagi) wykrywane automatycznie (`src/data.py: fit_feature_spec`).
+
+Trzy **samonadzorowane** obiektywy na tym samym backbone:
+- **InfoNCE / CPC** (`src/ssl_infonce.py`) — enkoder causal, predyktory liniowe
+  przewidują reprezentacje przyszłych kroków `t+k`; strata InfoNCE z negatywami
+  w batchu. Uczy **dynamiki** gry.
+- **Barlow Twins** (`src/ssl_barlow.py`) — dwa augmentowane widoki okna
+  (`src/augment.py`: feature-dropout, szum na cechach ciągłych, time-dropout),
+  strata krzyżowej korelacji → macierz jednostkowa. Uczy **niezmienniczości**.
+- **Transformer MAE** (`src/ssl_mae.py`) — maskowanie ~30% kroków i rekonstrukcja
+  ich cech (MSE dla ciągłych + BCE dla binarnych). Uczy **struktury** kroku.
+
+**Ewaluacja — linear probe** (`src/probe.py`): enkoder zamrożony → embedding kroku
+w pozycji karty + jawne cechy per-karta → regresja logistyczna
+(`class_weight='balanced'`). Metryka: **macro-F1 + F1 per klasa**, raportowane
+osobno dla `test_kind ∈ {seen, unseen_mcts}`. Punkty odniesienia: `raw` (bez
+enkodera), `random` (enkoder nieuczony), `supervised` (`src/supervised.py`, górna
+granica end-to-end z etykietami).
+
+Orkiestracja: `src/train_all.py` (CLI) — pretrening wszystkich metod + probe +
+zapis `results/metrics.json`, `results/losses.json`, `results/encoder_*.pt`.
+Hiperparametry CPU-friendly: `src/config.py`. Domyślnie podpróbkowanie gier
+(`--subsample-games`) i okno 256 kroków, bo generowanie jest CPU-bound.
+
+```bash
+# pretrening 3 metod SSL + baseline'y + probe (CPU)
+.venv-ml/Scripts/python -m src.train_all
+#   smoke test: --subsample-games 300 --epochs 2 --probe-games 200
+```
+
+## Notebooki
+
+- `notebooks/01_eda.ipynb` — analiza danych (rozkłady klas, `rounds_held`,
+  robber↔rycerz, długości sekwencji, postęp gry) + baseline regresji logistycznej.
+- `notebooks/02_representation_learning.ipynb` — porównanie InfoNCE / Barlow Twins
+  / Transformer MAE: krzywe strat, macro-F1 (seen vs unseen), F1 per klasa, t-SNE
+  embeddingów. Wymaga wcześniejszego `src/train_all.py`.
+
+## Modele zespołu (równoległe ścieżki)
 
 - **Baseline** (wspólny): reguły dziedzinowe + logistic regression na ręcznych
   cechach (`rounds_held`, kontekst surowcowy, `robber_on_observed`).
 - **Osoba 1:** VAE z enkoderem LSTM (okno historii) + badanie hiperparametru β.
 - **Osoba 2:** RSSM (Hafner et al. 2019, podstawowy z Dreamera, NIE HiP-RSSM)
   — inkrementalna agregacja stanu przez całą grę.
+- **Ścieżka SSL** (powyżej): InfoNCE / Barlow Twins / Transformer — alternatywne,
+  samonadzorowane reprezentacje oceniane tym samym protokołem probe.
 - Wejście modeli: sekwencja z `timesteps` (grupować po `game_id, observed_color`,
   sortować po `action_index`). Predykcja: 5-klasowa per karta z `card_samples`.

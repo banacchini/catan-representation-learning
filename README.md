@@ -52,7 +52,23 @@ catan-representation-learning/
 ├── verify_dataset.py        # weryfikacja zbioru (15 checków)
 ├── split_dataset.py         # podział train/val/test bez wycieku
 ├── benchmark_parallel.py    # pomiar czasu generowania + diagnostyka win-rate
-├── data/                    # wygenerowane chunki parquet (nie commitowane)
+├── requirements-ml.txt      # zależności części modelowej (.venv-ml, CPU)
+├── src/                     # uczenie reprezentacji (SSL) + ewaluacja
+│   ├── config.py            #   hiperparametry (CPU-friendly)
+│   ├── data.py              #   sekwencje, FeatureSpec, Dataset/collate
+│   ├── models.py            #   wspólny enkoder Transformer + głowice
+│   ├── augment.py           #   augmentacje okien (Barlow Twins)
+│   ├── ssl_infonce.py       #   pretrening InfoNCE / CPC
+│   ├── ssl_barlow.py        #   pretrening Barlow Twins
+│   ├── ssl_mae.py           #   pretrening Transformer MAE
+│   ├── supervised.py        #   górna granica (end-to-end)
+│   ├── probe.py             #   linear-probe + baseline raw
+│   └── train_all.py         #   orkiestracja: pretrening + probe -> results/
+├── notebooks/
+│   ├── 01_eda.ipynb         #   analiza danych, wykresy, baseline
+│   └── 02_representation_learning.ipynb  # porównanie metod, t-SNE, F1
+├── results/                 # metrics.json, losses.json, encoder_*.pt (nie commitowane)
+├── data/                    # wygenerowane chunki parquet
 │   └── splits/              # train/val/test
 ├── IMPLEMENTACJA.md         # szczegóły decyzji implementacyjnych
 └── README.md
@@ -129,6 +145,52 @@ patrz **`IMPLEMENTACJA.md`**.
 
 Metryka: **F1 per typ karty** (zbiór jest niezbalansowany — accuracy myli).
 Ewaluacja osobno dla widzianego i niewidzianego (MCTS) stylu gry.
+
+## Analiza danych i uczenie reprezentacji (SSL)
+
+Dodatkowy moduł: **samonadzorowane uczenie reprezentacji** sekwencji stanu gry na
+wspólnym backbone **Transformer**, porównanie trzech obiektywów oceniane protokołem
+**linear-probe** (F1 per typ, osobno seen vs `unseen_mcts`).
+
+| Metoda | Typ | Plik |
+|---|---|---|
+| **InfoNCE / CPC** | kontrastywne, czasowe (predykcja przyszłych kroków) | `src/ssl_infonce.py` |
+| **Barlow Twins** | nie-kontrastywne (niezmienniczość + dekorelacja) | `src/ssl_barlow.py` |
+| **Transformer MAE** | masked modeling (rekonstrukcja zamaskowanych kroków) | `src/ssl_mae.py` |
+
+Punkty odniesienia: `raw` (bez enkodera), `random` (enkoder nieuczony),
+`supervised` (górna granica). Enkoder + protokół: `src/models.py`, `src/probe.py`.
+
+### Środowisko (osobne, CPU-only)
+
+PyTorch nie ma jeszcze wheeli na Pythona 3.14, więc analiza ma **własny venv 3.12**
+(catanatron tu niepotrzebny — dane są gotowe):
+
+```bash
+python -m pip install uv
+python -m uv venv .venv-ml --python 3.12
+python -m uv pip install --python .venv-ml -r requirements-ml.txt
+```
+
+### Uruchomienie
+
+```bash
+# 1. podział na zbiory (jeśli nie zrobiony) — czysty pandas, działa w .venv-ml
+.venv-ml/Scripts/python split_dataset.py --data-dir data --out-dir data/splits
+
+# 2. pretrening 3 metod SSL + baseline'y + linear probe (CPU, kilkadziesiąt minut)
+.venv-ml/Scripts/python -m src.train_all
+#    smoke test:  --subsample-games 300 --epochs 2 --probe-games 200
+#    wynik: results/metrics.json, results/losses.json, results/encoder_*.pt
+
+# 3. notebooki (uruchom kernel z .venv-ml)
+#    notebooks/01_eda.ipynb                  — analiza danych, wykresy, baseline
+#    notebooks/02_representation_learning.ipynb — porównanie metod, t-SNE, F1
+```
+
+Główne parametry `src/train_all.py`: `--subsample-games`, `--epochs`, `--batch-size`,
+`--probe-games`, `--methods` (np. `raw,random,infonce,barlow,mae,supervised`).
+Pozostałe hiperparametry: `src/config.py`.
 
 ## Uwagi
 
