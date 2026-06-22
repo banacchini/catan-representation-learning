@@ -61,12 +61,15 @@ catan-representation-learning/
 │   ├── ssl_infonce.py       #   pretrening InfoNCE / CPC
 │   ├── ssl_barlow.py        #   pretrening Barlow Twins
 │   ├── ssl_mae.py           #   pretrening Transformer MAE
+│   ├── ssl_vae.py           #   SeqVAE (kauzalny GRU + β-annealing)
+│   ├── ssl_rssm.py          #   RSSM (Dreamer-style, prior/posterior KL)
 │   ├── supervised.py        #   górna granica (end-to-end)
 │   ├── probe.py             #   linear-probe + baseline raw
 │   └── train_all.py         #   orkiestracja: pretrening + probe -> results/
 ├── notebooks/
-│   ├── 01_eda.ipynb         #   analiza danych, wykresy, baseline
-│   └── 02_representation_learning.ipynb  # porównanie metod, t-SNE, F1
+│   ├── 01_eda.ipynb                      #   analiza danych, wykresy, baseline
+│   ├── 02_representation_learning.ipynb  #   porównanie SSL (InfoNCE/Barlow/MAE), UMAP, F1
+│   └── 03_vae_rssm.ipynb                 #   VAE + RSSM, ablacja β, analiza KL
 ├── results/                 # metrics.json, losses.json, encoder_*.pt (nie commitowane)
 ├── data/                    # wygenerowane chunki parquet
 │   └── splits/              # train/val/test
@@ -163,30 +166,39 @@ Punkty odniesienia: `raw` (bez enkodera), `random` (enkoder nieuczony),
 
 ### Środowisko (osobne, CPU-only)
 
-PyTorch nie ma jeszcze wheeli na Pythona 3.14, więc analiza ma **własny venv 3.12**
+PyTorch nie ma wheeli na Pythona 3.14, więc analiza ma **własny venv 3.12**
 (catanatron tu niepotrzebny — dane są gotowe):
 
-```bash
-python -m pip install uv
-python -m uv venv .venv-ml --python 3.12
-python -m uv pip install --python .venv-ml -r requirements-ml.txt
+```powershell
+# Windows (PowerShell)
+pip install uv
+uv venv .venv-ml --python 3.12
+uv pip install -p .venv-ml -r requirements-ml.txt
+
+# Rejestracja kernela Jupyter (jednorazowo)
+.venv-ml\Scripts\python -m ipykernel install --user --name catan-ml --display-name "catan-ml"
 ```
 
-### Uruchomienie
+### Uruchomienie (pierwsze lub po nowych danych)
 
-```bash
-# 1. podział na zbiory (jeśli nie zrobiony) — czysty pandas, działa w .venv-ml
-.venv-ml/Scripts/python split_dataset.py --data-dir data --out-dir data/splits
+```powershell
+# 1. Podział na zbiory
+.venv-ml\Scripts\python split_dataset.py --data-dir data --out-dir data/splits
 
-# 2. pretrening 3 metod SSL + baseline'y + linear probe (CPU, kilkadziesiąt minut)
-.venv-ml/Scripts/python -m src.train_all
-#    smoke test:  --subsample-games 300 --epochs 2 --probe-games 200
-#    wynik: results/metrics.json, results/losses.json, results/encoder_*.pt
+# 2. Wyczyść cache modeli (konieczne po nowych danych)
+Remove-Item results\encoder_*.pt, results\metrics.json -ErrorAction SilentlyContinue
+Remove-Item results\nb03_*.pt, results\nb03_*.json, results\nb03_*.npz -ErrorAction SilentlyContinue
 
-# 3. notebooki (uruchom kernel z .venv-ml)
-#    notebooks/01_eda.ipynb                  — analiza danych, wykresy, baseline
-#    notebooks/02_representation_learning.ipynb — porównanie metod, t-SNE, F1
+# 3. Puść notebooki po kolei (NB03 czyta metrics.json z NB02 — kolejność ważna)
+.venv-ml\Scripts\jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb --ExecutePreprocessor.timeout=7200 --ExecutePreprocessor.kernel_name=catan-ml
+.venv-ml\Scripts\jupyter nbconvert --to notebook --execute --inplace notebooks/02_representation_learning.ipynb --ExecutePreprocessor.timeout=7200 --ExecutePreprocessor.kernel_name=catan-ml
+.venv-ml\Scripts\jupyter nbconvert --to notebook --execute --inplace notebooks/03_vae_rssm.ipynb --ExecutePreprocessor.timeout=7200 --ExecutePreprocessor.kernel_name=catan-ml
 ```
+
+Notebooki:
+- `01_eda.ipynb` — analiza danych, wykresy, baseline (~5 min)
+- `02_representation_learning.ipynb` — InfoNCE / Barlow / MAE, UMAP, SHAP, McNemar (~1–2 h)
+- `03_vae_rssm.ipynb` — VAE + RSSM, ablacja β, analiza KL (~1 h)
 
 Główne parametry `src/train_all.py`: `--subsample-games`, `--epochs`, `--batch-size`,
 `--probe-games`, `--methods` (np. `raw,random,infonce,barlow,mae,supervised`).
