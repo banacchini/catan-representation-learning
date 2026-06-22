@@ -83,3 +83,106 @@ Traceback (most recent call last):
   File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 774, in get
     raise self._value
 TypeError: list indices must be integers or slices, not NoneType
+================================================================
+URUCHOMIENIE GENERATORA: 5000 gier (ID 0..4999)
+================================================================
+[1/5] Gry ID 0..999...
+ -> 294,092 krokow -> timesteps_00000_to_00999.parquet
+[2/5] Gry ID 1000..1999...
+ -> 293,127 krokow -> timesteps_01000_to_01999.parquet
+[3/5] Gry ID 2000..2999...
+ -> 290,781 krokow -> timesteps_02000_to_02999.parquet
+[4/5] Gry ID 3000..3999...
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+                    ~~~~^^^^^^^^^^^^^^^
+  File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+  File "/home/dominik/projects/wust/sem1/ur/catan-representation-learning/generate_dataset_v2.py", line 272, in play_one_game
+    game.play(accumulators=[snapper])
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 148, in play
+    self.play_tick(decide_fn=decide_fn, accumulators=accumulators)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 168, in play_tick
+    else player.decide(self, self.playable_actions)
+         ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/players/mcts.py", line 30, in decide
+    root.run_simulation()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/players/mcts.py", line 69, in run_simulation
+    result = tmp.playout()
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/players/mcts.py", line 125, in playout
+    return run_playout(self.game)
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/players/playouts.py", line 73, in run_playout
+    game_copy.play(decide_fn=decide_fn)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 148, in play
+    self.play_tick(decide_fn=decide_fn, accumulators=accumulators)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 177, in play_tick
+    return self.execute(action)
+           ~~~~~~~~~~~~^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/game.py", line 193, in execute
+    action_record = apply_action(self.state, action, action_record)
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/apply_action.py", line 87, in apply_action
+    action_record = apply_build_settlement(state, action)
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/apply_action.py", line 158, in apply_build_settlement
+    ) = state.board.build_settlement(action.color, node_id, False)
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catanatron/catanatron/catanatron/models/board.py", line 132, in build_settlement
+    del self.connected_components[edge_color][b_index]
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+TypeError: list indices must be integers or slices, not NoneType
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dominik/projects/wust/sem1/ur/catan-representation-learning/generate_dataset_v2.py", line 353, in <module>
+    generate(args.num, args.out_dir, args.workers, args.chunk_size, args.start_id)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dominik/projects/wust/sem1/ur/catan-representation-learning/generate_dataset_v2.py", line 311, in generate
+    results = pool.map(play_one_game, games_in_chunk)
+  File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 367, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dominik/miniforge3/lib/python3.13/multiprocessing/pool.py", line 774, in get
+    raise self._value
+TypeError: list indices must be integers or slices, not NoneType
+================================================================
+URUCHOMIENIE GENERATORA: 5000 gier (ID 3000..7999)
+================================================================
+[1/5] Gry ID 3000..3999...
+ -> 298,711 krokow -> timesteps_03000_to_03999.parquet
+[2/5] Gry ID 4000..4999...
+Error occurred while playing game 4809: list indices must be integers or slices, not NoneType
+ -> 293,055 krokow -> timesteps_04000_to_04999.parquet
+[3/5] Gry ID 5000..5999...
+ -> 293,166 krokow -> timesteps_05000_to_05999.parquet
+[4/5] Gry ID 6000..6999...
+ -> 301,605 krokow -> timesteps_06000_to_06999.parquet
+[5/5] Gry ID 7000..7999...
+ -> 297,854 krokow -> timesteps_07000_to_07999.parquet
+================================================================
+ZAKONCZONO. Gry 3000..7999
+Pominieto gier (brak silnego bota): 196/5000
+timesteps: 1,484,391 | card_samples: 289,308
+Czas: 2381.0s (476 ms/gra)
+================================================================
+================================================================
+URUCHOMIENIE GENERATORA: 2000 gier (ID 8000..9999)
+================================================================
+[1/2] Gry ID 8000..8999...
+ -> 315,353 krokow -> timesteps_08000_to_08999.parquet
+[2/2] Gry ID 9000..9999...
+ -> 295,463 krokow -> timesteps_09000_to_09999.parquet
+================================================================
+ZAKONCZONO. Gry 8000..9999
+Pominieto gier (brak silnego bota): 64/2000
+timesteps: 610,816 | card_samples: 121,922
+Czas: 1045.9s (523 ms/gra)
+================================================================

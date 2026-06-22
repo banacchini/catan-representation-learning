@@ -1,12 +1,15 @@
 """
-Weryfikacja wygenerowanego zbioru Catan (struktura v2, chunki).
+Weryfikacja wygenerowanego zbioru Catan (struktura v2, chunki, JEDNA
+perspektywa na grę).
 
-Wczytuje WSZYSTKIE chunki przez glob:
+Wczytuje wszystkie chunki przez glob:
     timesteps_*.parquet     - sekwencja per akcja
     card_samples_*.parquet  - próbki per-karta (5-klasowy label)
 
-Sprawdza integralność, brak wycieku targetu, sensowność, spójność obu tabel
-i poprawność splitu transferowego.
+Sprawdza integralność, brak wycieku, sensowność (w tym NOWE kolumny: bank,
+produkcja, played_*_total, dev_deck_remaining), spójność obu tabel i split.
+Diagnostyka rounds_held liczona PER POJEDYNCZA KARTA (nie per wiersz!), bo
+per-wiersz zawyża długo trzymane karty.
 
 Uruchom:
     uv run verify_dataset.py --data-dir data
@@ -23,7 +26,11 @@ DEV_TYPES = ["KNIGHT", "VICTORY_POINT", "ROAD_BUILDING", "MONOPOLY", "YEAR_OF_PL
 Y_COLS = [f"y_{d.lower()}" for d in DEV_TYPES]
 TS_META = ["game_id", "action_index", "observed_color", "observed_type",
            "table", "winner_type"]
+RESOURCES = ["wood", "brick", "sheep", "wheat", "ore"]
 OBSERVABLE_TYPES = {"ValueFunction", "AlphaBeta", "MCTS"}
+# limity liczby kart development w grze (do sanity-checku played_*_total)
+DEV_LIMITS = {"knight": 14, "victory_point": 5, "road_building": 2,
+              "monopoly": 2, "year_of_plenty": 2}
 
 
 def load_chunks(data_dir, prefix):
@@ -33,7 +40,7 @@ def load_chunks(data_dir, prefix):
         if os.path.exists(single):
             files = [single]
     if not files:
-        raise FileNotFoundError(f"Brak plików {prefix}_*.parquet w {data_dir}")
+        raise FileNotFoundError(f"Brak plikow {prefix}_*.parquet w {data_dir}")
     return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True), files
 
 
@@ -70,6 +77,10 @@ def main(data_dir):
     contig = ts.groupby(["game_id", "observed_color"])["action_index"].apply(
         lambda s: sorted(s) == list(range(len(s)))).all()
     results.append(check("action_index ciagly per perspektywa", contig))
+    # jedna perspektywa na gre
+    max_persp = ts.groupby("game_id")["observed_color"].nunique().max()
+    results.append(check("dokladnie jedna perspektywa na gre", max_persp == 1,
+                         f"max perspektyw/gre = {max_persp}"))
 
     # --- 2. BRAK WYCIEKU ---
     print("\n[2] Brak wycieku targetu")
@@ -85,7 +96,7 @@ def main(data_dir):
     results.append(check("brak kolumn z rozbiciem kart na rece", not forbidden,
                          str(forbidden) if forbidden else "ok"))
 
-    # --- 3. SENSOWNOSC ---
+    # --- 3. SENSOWNOSC (w tym NOWE kolumny) ---
     print("\n[3] Sensownosc wartosci")
     results.append(check("obserwowani to tylko silne boty",
                          set(ts["observed_type"].unique()) <= OBSERVABLE_TYPES,
@@ -99,6 +110,48 @@ def main(data_dir):
                          0 < rob.mean() < 1, f"{rob.mean()*100:.1f}% krokow"))
     results.append(check("rounds_held nieujemne",
                          (card["rounds_held"] >= 0).all()))
+
+    # NOWE: bank w zakresie 0-19
+    bank_cols = [f"bank_{r}" for r in RESOURCES]
+    if all(c in ts.columns for c in bank_cols):
+        bmin, bmax = ts[bank_cols].min().min(), ts[bank_cols].max().max()
+        results.append(check("bank w zakresie 0-19", 0 <= bmin and bmax <= 19,
+                             f"min={bmin} max={bmax}"))
+    else:
+        results.append(check("kolumny bank_* obecne", False, "BRAK"))
+
+    # NOWE: produkcja nieujemna
+    prod_cols = [c for c in ts.columns if "_prod_" in c]
+    if prod_cols:
+        results.append(check("produkcja nieujemna (>=0)",
+                             (ts[prod_cols].min().min() >= 0),
+                             f"{len(prod_cols)} kolumn, min={ts[prod_cols].min().min()}"))
+    else:
+        results.append(check("kolumny *_prod_* obecne", False, "BRAK"))
+
+    # NOWE: played_*_total w limitach Catana
+    pt_ok = True
+    pt_detail = []
+    for t, lim in DEV_LIMITS.items():
+        col = f"played_{t}_total"
+        if col in ts.columns:
+            mx = ts[col].max()
+            if mx > lim:
+                pt_ok = False
+                pt_detail.append(f"{t}={mx}>{lim}")
+        else:
+            pt_ok = False
+            pt_detail.append(f"brak {col}")
+    results.append(check("played_*_total w limitach kart", pt_ok,
+                         ", ".join(pt_detail) if pt_detail else "ok"))
+
+    # NOWE: dev_deck_remaining w zakresie 0-25
+    if "dev_deck_remaining" in ts.columns:
+        dmin, dmax = ts["dev_deck_remaining"].min(), ts["dev_deck_remaining"].max()
+        results.append(check("dev_deck_remaining w zakresie 0-25",
+                             0 <= dmin and dmax <= 25, f"min={dmin} max={dmax}"))
+    else:
+        results.append(check("kolumna dev_deck_remaining obecna", False, "BRAK"))
 
     # --- 4. SPOJNOSC TS <-> CARD ---
     print("\n[4] Spojnosc timesteps <-> card_samples")
@@ -134,13 +187,29 @@ def main(data_dir):
     print(f"WYNIK: {passed}/{len(results)} checkow przeszlo")
     print("=" * 64)
 
-    print("\nRozklad 5-klasowego labelu (probki per-karta):")
+    print("\nRozklad 5-klasowego labelu (PER WIERSZ):")
     print(card["label"].value_counts().to_string())
-    print("\nProbki per-karta na poczatkach tur:",
-          (card["is_observed_turn_start"] == 1).sum())
-    print("\nMediana rounds_held per typ (sygnal: VP trzymane najdluzej?):")
-    print(card.groupby("label")["rounds_held"].median()
-          .sort_values(ascending=False).to_string())
+
+    # --- DIAGNOSTYKA rounds_held: per wiersz vs PER POJEDYNCZA KARTA ---
+    # pojedyncza karta = (game_id, observed_color, bought_at_action)
+    life = (card.groupby(["game_id", "observed_color", "bought_at_action", "label"])
+            ["rounds_held"].max().reset_index())
+    print("\n--- DIAGNOSTYKA rounds_held ---")
+    print("UWAGA: mediana PER WIERSZ zawyza dlugo trzymane karty (1 karta")
+    print("trzymana N akcji = N wierszy). Honest metryka = czas zycia PER KARTA.\n")
+    perrow = card.groupby("label")["rounds_held"].median()
+    percard = life.groupby("label")["rounds_held"].median()
+    ncards = life["label"].value_counts()
+    cmp = pd.DataFrame({
+        "mediana_per_wiersz": perrow,
+        "mediana_per_karta": percard,
+        "liczba_roznych_kart": ncards,
+    }).fillna(0)
+    print(cmp.to_string())
+    print("\nMala 'liczba_roznych_kart' => mediana jest szumem (np. road_building,")
+    print("monopoly, year_of_plenty sa kupowane rzadko). VP nigdy nie zagrywane")
+    print("=> zawsze trzymane do konca (wysoki czas zycia jest poprawny).")
+
     print("\nPerspektywy per typ obserwowanego:")
     print(ts.drop_duplicates(["game_id", "observed_color"])["observed_type"]
           .value_counts().to_string())
