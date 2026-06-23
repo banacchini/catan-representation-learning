@@ -4,6 +4,8 @@ Wszystko sterowalne z CLI (`src/train_all.py`). Maly model + krotka sekwencja
 treningowa + podprobkowanie gier, zeby pelny przebieg byl wykonalny bez GPU.
 """
 from dataclasses import dataclass, field, asdict
+import torch
+
 
 
 @dataclass
@@ -45,7 +47,7 @@ class Config:
 
     # --- inne ---
     seed: int = 0
-    device: str = "cpu"
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
     out_dir: str = "results"
 
     def to_dict(self):

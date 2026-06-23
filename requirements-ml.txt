@@ -1,17 +1,22 @@
-# Instalacja:
-#   python -m uv venv .venv-ml --python 3.12
-#   python -m uv pip install --python .venv-ml -r requirements-ml.txt
+# Instalacja (rdzeń treningowy):
+#   uv sync
+#   uv pip install torch --index-url https://download.pytorch.org/whl/cu128  # RTX 50-series
+#
+# Notebooki (EDA, SHAP, UMAP):
+#   uv sync --extra notebooks
 torch>=2.2,<3.0
 numpy>=1.26
 pandas>=2.2
 pyarrow>=15.0
 scikit-learn>=1.4
+tqdm>=4.66
+# --- opcjonalnie: uv sync --extra notebooks ---
 matplotlib>=3.8
 seaborn>=0.13
-tqdm>=4.66
 jupyter>=1.0
 ipykernel>=6.29
-# analiza/wizualizacja notebooka 02 (uczenie reprezentacji)
 umap-learn>=0.5.7
 statsmodels>=0.14
 shap>=0.45
+llvmlite>=0.41.1
+numba>=0.59.0
