@@ -24,7 +24,8 @@
 # > Dane: 7000 gier, ~5.0 M kroków (`timesteps`), ~692 k próbek per-karta (`card_samples`).
 
 # %%
-import glob, warnings
+import glob, warnings, sys
+sys.path.insert(0, "..")
 import numpy as np, pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -103,16 +104,18 @@ print("styl publikacyjny gotowy; eksport ->", FIGDIR)
 # %% [markdown]
 # ## 1. Dane i kontrola integralności
 # 
-# `card_samples` (jedna próbka = jedna trzymana karta) ładujemy w całości; z `timesteps`
-# (jeden wiersz = jedna akcja) tylko potrzebne kolumny. Poniżej **komórka wczytania danych
-# zachowana bez zmian**, a następnie szybki audyt jakości (braki, duplikaty, zakresy).
+# `card_samples` (jedna próbka = jedna trzymana karta per krok akcji) ładujemy w całości;
+# z `timesteps` (jeden wiersz = jedna akcja) tylko potrzebne kolumny. Audyt integralności
+# dotyczy surowych próbek; przed analizą targetu (§2+) zawężamy do **startów tur dowolnego
+# gracza** (`filter_to_turn_starts` — ten sam protokół co ewaluacja modelu w nb 02).
 
 # %%
 card = pd.concat([pd.read_parquet(f) for f in sorted(glob.glob(f"{DATA}/card_samples_*.parquet"))],
                  ignore_index=True)
 ts_cols = ["game_id", "action_index", "observed_color", "observed_type", "robber_on_observed",
            "y_knight", "num_turns", "obs_total_dev_bought", "obs_total_dev_played",
-           "n_hidden_cards", "is_observed_turn_start"]
+           "n_hidden_cards", "is_observed_turn_start",
+           "p0_is_current", "p1_is_current", "p2_is_current", "p3_is_current"]
 ts = pd.concat([pd.read_parquet(f, columns=ts_cols) for f in sorted(glob.glob(f"{DATA}/timesteps_*.parquet"))],
                ignore_index=True)
 card["label_pl"] = card.label.map(SHORT)
@@ -133,12 +136,22 @@ print("rounds_held: min %d, max %d  |  card_slot: %d..%d  |  n_hidden_cards: %d.
     card.n_hidden_cards.min(), card.n_hidden_cards.max()))
 display(audit.style.set_caption("Audyt kolumn card_samples (braki = 0 ⇒ dane kompletne)"))
 
+# %%
+from src.data import filter_to_turn_starts
+
+n_per_action = len(card)
+card = filter_to_turn_starts(card, ts)
+print(f"Protokół ewaluacji (jak nb 02+): {n_per_action:,} próbek per-akcja → "
+      f"{len(card):,} na starcie tury dowolnego gracza ({len(card) / n_per_action * 100:.1f}%)")
+
 # %% [markdown]
 # ## 2. Krajobraz targetu — niezbalansowanie z przedziałami ufności
 # 
-# Typ karty to target 5-klasowy. Oprócz liczności pokazujemy **95% CI proporcji** (Wilson),
-# **imbalance ratio** (najczęstsza / najrzadsza) i **entropię** rozkładu (0 = jedna klasa,
-# $\log_2 5≈2.32$ = idealnie równo). Skrajna skośność uzasadnia **macro-F1 + ważenie klas**.
+# Typ karty to target 5-klasowy. **Liczności i udziały poniżej liczymy tylko na startach tur
+# dowolnego gracza** (ten sam protokół co linear-probe w notebooku 02), nie na każdej akcji.
+# Oprócz liczności pokazujemy **95% CI proporcji** (Wilson), **imbalance ratio** (najczęstsza /
+# najrzadsza) i **entropię** rozkładu (0 = jedna klasa, $\log_2 5≈2.32$ = idealnie równo).
+# Skrajna skośność uzasadnia **macro-F1 + ważenie klas**.
 
 # %%
 vc = card.label.value_counts().reindex(LABELS)
@@ -172,7 +185,7 @@ sns.despine(fig); savefig(fig, "eda_fig2_class_balance"); plt.show()
 # Karty **VICTORY_POINT** trzyma się do końca gry (nigdy nie zagrywane) → ogromny
 # `rounds_held`; rycerze i year-of-plenty grane są szybko. Sprawdzamy **separowalność**:
 # rozkłady (box), **ECDF** per typ, **test Kruskala-Wallisa** (omnibus) oraz **macierz
-# Cliff's delta** (parami) — bo przy ~0.7 mln próbek p-wartości są zawsze ≈0, więc liczy się
+# Cliff's delta** (parami) — przy dużej liczbie próbek p-wartości są zawsze ≈0, więc liczy się
 # **wielkość efektu**.
 
 # %%
