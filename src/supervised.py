@@ -11,7 +11,8 @@ import torch.nn as nn
 import torch.nn.functional as Fun
 from torch.utils.data import DataLoader, Dataset
 
-from .data import CARD_FEATS, LABEL_TO_IDX, LABELS, build_sequences, load_split
+from .data import (CARD_FEATS, LABEL_TO_IDX, LABELS, build_sequences,
+                   filter_to_turn_starts, load_split)
 from .models import SeqTransformerEncoder
 
 
@@ -72,6 +73,7 @@ def train_supervised(encoder: SeqTransformerEncoder, spec, cfg, device,
         rng = np.random.default_rng(cfg.seed)
         keep = set(rng.choice(ts["game_id"].unique(), n_games, replace=False))
         ts = ts[ts["game_id"].isin(keep)]; card = card[card["game_id"].isin(keep)]
+    card = filter_to_turn_starts(card, ts)
     seqs = build_sequences(ts, spec, subsample_games=0)
     ds = _SupSeqDataset(seqs, card, cfg.eval_seq_len)
     loader = DataLoader(ds, batch_size=cfg.batch_size, shuffle=True,

@@ -3,37 +3,39 @@
 Uczenie reprezentacji stanu przekonań o ukrytych kartach development w grze Catan.
 Projekt na przedmiot **Uczenie Reprezentacji** (MSc AI, Politechnika Wrocławska).
 
-Model uczy się wnioskować o ukrytych kartach development obserwowanego gracza na
-podstawie publicznie widocznego przebiegu gry. Porównujemy reprezentację z **VAE
-(enkoder LSTM)** oraz **RSSM** względem baseline'u regułowego.
+Model ma wnioskować o typach ukrytych kart development obserwowanego gracza na
+podstawie publicznie widocznego przebiegu gry. Główne porównanie obejmuje
+**VAE-LSTM** i **RSSM** względem nieuczonego baseline'u heurystycznego. Repo zawiera
+też wcześniejszą ścieżkę Transformer SSL (InfoNCE / Barlow Twins / MAE), traktowaną
+jako dodatkowy punkt odniesienia.
 
 ## Wymagania
 
 - **Python 3.11+**
-- **[uv](https://github.com/astral-sh/uv)** jako menedżer pakietów
-- **catanatron sklonowany z GitHuba** — patrz niżej (silne boty nie są w wersji z PyPI)
+- **[uv](https://github.com/astral-sh/uv)** jako jedyny menedżer środowiska i uruchamiania komend
+- **catanatron sklonowany z GitHuba** obok tego repozytorium (`../catanatron`) — silne boty nie są dostępne w wersji z PyPI
 
 ## Instalacja
 
-Repozytorium `catanatron` musi być **sklonowane w katalogu nadrzędnym** względem
-tego projektu (`../catanatron`). Wersja z PyPI zawiera tylko słabe boty; silne
-(`AlphaBetaPlayer`, `ValueFunctionPlayer`, `MCTSPlayer`) są wyłącznie w repo.
+Repozytorium `catanatron` powinno znajdować się w katalogu nadrzędnym względem tego
+projektu. `pyproject.toml` wskazuje je jako zależność editable przez `uv`.
 
 ```bash
-# 1. Sklonuj catanatron OBOK tego projektu
+# 1. Sklonuj catanatron obok tego projektu
 cd ..
 git clone https://github.com/bcollazo/catanatron.git
 cd catan-representation-learning
 
-# 2. Środowisko i zależności
-uv venv
-uv pip install -e ../catanatron
-uv add pandas pyarrow
+# 2. Utwórz środowisko i zainstaluj zależności z uv.lock / pyproject.toml
+uv sync
+
+# 3. Opcjonalne zależności notebookowe (Jupyter, matplotlib, seaborn, SHAP, UMAP)
+uv sync --extra notebooks
 ```
 
 Oczekiwana struktura katalogów:
 
-```
+```text
 sem1/ur/
 ├── catanatron/                      # sklonowane repo (silne boty)
 └── catan-representation-learning/   # ten projekt
@@ -41,171 +43,191 @@ sem1/ur/
     └── ...
 ```
 
-> Jeśli `uv` zgłasza konflikt wersji Pythona, ustaw `requires-python = ">=3.11"`
-> w `pyproject.toml`.
-
 ## Struktura repozytorium
 
-```
+```text
 catan-representation-learning/
-├── generate_dataset_v2.py   # generator danych (catanatron -> parquet)
-├── verify_dataset.py        # weryfikacja zbioru (15 checków)
-├── split_dataset.py         # podział train/val/test bez wycieku
+├── generate_dataset_v2.py   # aktualny generator danych (catanatron -> parquet)
+├── verify_dataset.py        # weryfikacja zbioru i braku przecieku
+├── split_dataset.py         # podział train/val/test bez wycieku per gra
 ├── benchmark_parallel.py    # pomiar czasu generowania + diagnostyka win-rate
-├── requirements-ml.txt      # zależności części modelowej (.venv-ml, CPU)
-├── src/                     # uczenie reprezentacji (SSL) + ewaluacja
-│   ├── config.py            #   hiperparametry (CPU-friendly)
-│   ├── data.py              #   sekwencje, FeatureSpec, Dataset/collate
-│   ├── models.py            #   wspólny enkoder Transformer + głowice
-│   ├── augment.py           #   augmentacje okien (Barlow Twins)
-│   ├── ssl_infonce.py       #   pretrening InfoNCE / CPC
-│   ├── ssl_barlow.py        #   pretrening Barlow Twins
-│   ├── ssl_mae.py           #   pretrening Transformer MAE
-│   ├── ssl_vae.py           #   SeqVAE (kauzalny GRU + β-annealing)
-│   ├── ssl_rssm.py          #   RSSM (Dreamer-style, prior/posterior KL)
-│   ├── supervised.py        #   górna granica (end-to-end)
-│   ├── probe.py             #   linear-probe + baseline raw
-│   └── train_all.py         #   orkiestracja: pretrening + probe -> results/
+├── pyproject.toml           # zależności i źródło editable ../catanatron
+├── uv.lock                  # lockfile środowiska uv
+├── requirements-ml.txt      # pomocniczy eksport zależności; uv pozostaje źródłem prawdy
+├── src/
+│   ├── config.py            # hiperparametry i ścieżki
+│   ├── data.py              # sekwencje, FeatureSpec, Dataset/collate, turn-start filtering
+│   ├── models.py            # Transformer backbone dla ścieżki SSL
+│   ├── augment.py           # augmentacje dla Barlow Twins
+│   ├── ssl_infonce.py       # InfoNCE / CPC
+│   ├── ssl_barlow.py        # Barlow Twins
+│   ├── ssl_mae.py           # Transformer MAE
+│   ├── ssl_vae.py           # SeqVAE: LSTM + β-annealing, wariant gauss/cat
+│   ├── ssl_rssm.py          # RSSM: GRU + stochastyczny latent, wariant gauss/cat
+│   ├── supervised.py        # supervised upper bound dla ścieżki Transformer
+│   ├── supervised_seq.py    # supervised warianty A/B/C dla VAE/RSSM
+│   ├── probe.py             # frozen encoder + linear probe / raw baseline
+│   ├── baseline_heuristic.py # finalny nieuczony baseline regułowy
+│   ├── search.py            # search konfiguracji na VAL
+│   ├── train_final.py       # finalny trening multi-seed na TEST
+│   └── train_all.py         # wcześniejsza orkiestracja Transformer SSL
 ├── notebooks/
-│   ├── 01_eda.ipynb                      #   analiza danych, wykresy, baseline
-│   ├── 02_representation_learning.ipynb  #   porównanie SSL (InfoNCE/Barlow/MAE), UMAP, F1
-│   └── 03_vae_rssm.ipynb                 #   VAE + RSSM, ablacja β, analiza KL
-├── results/                 # metrics.json, losses.json, encoder_*.pt (nie commitowane)
-├── data/                    # wygenerowane chunki parquet
-│   └── splits/              # train/val/test
+│   ├── 01_eda.ipynb
+│   ├── 02_representation_learning.ipynb
+│   ├── 03_vae_rssm.ipynb
+│   ├── 04_final_report.ipynb
+│   └── 05_project_summary.ipynb
+├── results/                 # metryki, checkpointy i figury (niecommitowane)
+├── data/                    # wygenerowane dane (niecommitowane)
+│   └── splits/
 ├── IMPLEMENTACJA.md         # szczegóły decyzji implementacyjnych
 └── README.md
 ```
 
-## Pipeline
+## Pipeline danych
 
-### 1. (Opcjonalnie) Benchmark — ile potrwa generowanie
+### 1. Benchmark generowania (opcjonalnie)
 
 ```bash
 uv run benchmark_parallel.py --num 50
 ```
-Mierzy czas na wszystkich rdzeniach i ekstrapoluje do 10k gier. Pokazuje też
-win-rate botów. Generowanie jest **CPU-bound** — GPU nie pomaga.
 
 ### 2. Generowanie danych
 
 ```bash
 uv run generate_dataset_v2.py --num 10000 --out-dir data --workers 16 --chunk-size 1000
 ```
-Produkuje dwie powiązane tabele w chunkach:
-- `data/timesteps_*.parquet` — sekwencja per akcja (wejście dla VAE/RSSM)
-- `data/card_samples_*.parquet` — próbki per-karta (5-klasowy target)
 
-Argumenty: `--num` liczba gier, `--workers` liczba procesów,
-`--chunk-size` gier na plik, `--start-id` początkowe ID gry (do wznawiania).
+Generator zapisuje chunki:
 
-Długi przebieg najlepiej puścić w tle:
-```bash
-nohup uv run generate_dataset_v2.py --num 10000 --out-dir data --chunk-size 1000 &
-```
+- `data/timesteps_*.parquet` — sekwencja publicznych obserwacji per akcja,
+- `data/card_samples_*.parquet` — próbki per trzymana karta, z 5-klasowym targetem.
 
 ### 3. Weryfikacja
 
 ```bash
 uv run verify_dataset.py --data-dir data
 ```
-15 checków: integralność, brak wycieku targetu, spójność obu tabel, poprawność
-splitu. Powinno wyjść `15/15`.
 
-### 4. Podział na zbiory
+Weryfikacja sprawdza m.in. integralność dwóch tabel, brak target leakage, spójność
+śledzonej ręki z `IN_HAND` i kompletność kolumn v2.
+
+### 4. Split train/val/test
 
 ```bash
 uv run split_dataset.py --data-dir data --out-dir data/splits
 ```
-Tworzy `{train,val,test}_{timesteps,card_samples}.parquet`. Split **per gra**,
-z izolacją MCTS (gry z MCTS przy stole trafiają wyłącznie do testu jako
-niewidziany styl).
+
+Split jest per `game_id`. Gry z MCTS przy stole trafiają wyłącznie do testu jako
+`unseen_mcts`, a część gier bez MCTS tworzy test `seen`.
 
 ## Dane
 
-Format **parquet** (łatwy do współdzielenia, `pd.read_parquet(...)`).
+Format danych to parquet. Tabele łączą się po `(game_id, observed_color, action_index)`.
 
 | Tabela | Jednostka wiersza | Zastosowanie |
 |---|---|---|
-| `timesteps` | gra × perspektywa × akcja | wejście sekwencyjne (VAE-LSTM, RSSM) |
-| `card_samples` | pojedyncza trzymana karta | target 5-klasowy (klasyfikacja typu) |
+| `timesteps` | gra × obserwowany gracz × akcja | wejście sekwencyjne dla VAE-LSTM/RSSM/SSL |
+| `card_samples` | pojedyncza trzymana karta w danym kroku | target 5-klasowy |
 
-Łączenie tabel po kluczu `(game_id, observed_color, action_index)`.
-Dla modeli sekwencyjnych: grupować `timesteps` po `(game_id, observed_color)`,
-sortować po `action_index`.
+Cechy wejściowe zawierają wyłącznie informacje publiczne. Rozbicie ukrytych kart
+development (`y_*`) i ukryte punkty VP nie trafiają do wejścia modeli.
 
-Szczegóły wektora cech, maskowania, mechaniki catanatron i logiki splitu:
-patrz **`IMPLEMENTACJA.md`**.
+## Modele i ewaluacja
 
-> `data/` nie jest commitowane do repo (rozmiar). Zbiór generuje się lokalnie
-> albo współdzieli osobno (np. Dysk Google).
+### Główna ścieżka projektu
 
-## Modele
+- **Baseline heurystyczny** (`src/baseline_heuristic.py`) — nieuczony system reguł.
+  Startuje od priora składu talii i nakłada korekty wynikające z jawnych sygnałów gry:
+  długiego trzymania karty, niezagrania rycerza pod blokadą złodzieja, nadmiaru zasobów
+  oraz niskiego stanu banku zasobu.
+- **VAE-LSTM** (`src/ssl_vae.py`) — sekwencyjny VAE z enkoderem LSTM, β-annealingiem
+  i wariantem Gaussowskim lub kategorycznym.
+- **RSSM** (`src/ssl_rssm.py`) — Dreamer/PlaNet-style Recurrent State Space Model:
+  deterministyczny stan GRU + stochastyczny latent z uczonym priorem/posteriorem.
 
-- **Baseline** — reguły dziedzinowe + logistic regression na ręcznych cechach.
-- **Osoba 1** — VAE z enkoderem LSTM (+ badanie hiperparametru β).
-- **Osoba 2** — RSSM (Hafner et al. 2019).
+### Dodatkowa ścieżka Transformer SSL
 
-Metryka: **F1 per typ karty** (zbiór jest niezbalansowany — accuracy myli).
-Ewaluacja osobno dla widzianego i niewidzianego (MCTS) stylu gry.
+`src/train_all.py` porównuje InfoNCE/CPC, Barlow Twins i Transformer MAE na wspólnym
+Transformer backbone. To dodatkowy eksperyment porównawczy, nie główna hipoteza VAE vs RSSM.
 
-## Analiza danych i uczenie reprezentacji (SSL)
+### Protokół downstream
 
-Dodatkowy moduł: **samonadzorowane uczenie reprezentacji** sekwencji stanu gry na
-wspólnym backbone **Transformer**, porównanie trzech obiektywów oceniane protokołem
-**linear-probe** (F1 per typ, osobno seen vs `unseen_mcts`).
+Najważniejszy protokół to frozen encoder + klasyfikator/probe dla 5-klasowej predykcji
+typu ukrytej karty. Do embeddingu kroku doklejane są jawne cechy per karta, m.in.
+`rounds_held`, `card_slot`, `n_hidden_cards`, `bought_at_action`, `current_rel_pos`.
 
-| Metoda | Typ | Plik |
-|---|---|---|
-| **InfoNCE / CPC** | kontrastywne, czasowe (predykcja przyszłych kroków) | `src/ssl_infonce.py` |
-| **Barlow Twins** | nie-kontrastywne (niezmienniczość + dekorelacja) | `src/ssl_barlow.py` |
-| **Transformer MAE** | masked modeling (rekonstrukcja zamaskowanych kroków) | `src/ssl_mae.py` |
+Główna metryka to **macro-F1**, ponieważ klasy są silnie niezbalansowane. Raportujemy też
+F1 per klasa, accuracy pomocniczo oraz wyniki osobno dla `seen`, `unseen_mcts` i
+`observed_type`.
 
-Punkty odniesienia: `raw` (bez enkodera), `random` (enkoder nieuczony),
-`supervised` (górna granica). Enkoder + protokół: `src/models.py`, `src/probe.py`.
+## Eksperymenty modelowe
 
-### Środowisko (osobne, CPU-only)
+### Search hiperparametrów na VAL
 
-PyTorch nie ma wheeli na Pythona 3.14, więc analiza ma **własny venv 3.12**
-(catanatron tu niepotrzebny — dane są gotowe):
-
-```powershell
-# Windows (PowerShell)
-pip install uv
-uv venv .venv-ml --python 3.12
-uv pip install -p .venv-ml -r requirements-ml.txt
-
-# Rejestracja kernela Jupyter (jednorazowo)
-.venv-ml\Scripts\python -m ipykernel install --user --name catan-ml --display-name "catan-ml"
+```bash
+uv run python -m src.search --subsample-games 1500 --epochs 8 --probe-games 1200
 ```
 
-### Uruchomienie (pierwsze lub po nowych danych)
+Wynik: `results/search_results.json` z rankingiem konfiguracji i najlepszą konfiguracją
+per rodzina.
 
-```powershell
-# 1. Podział na zbiory
-.venv-ml\Scripts\python split_dataset.py --data-dir data --out-dir data/splits
+### Finalny trening i ewaluacja TEST
 
-# 2. Wyczyść cache modeli (konieczne po nowych danych)
-Remove-Item results\encoder_*.pt, results\metrics.json -ErrorAction SilentlyContinue
-Remove-Item results\nb03_*.pt, results\nb03_*.json, results\nb03_*.npz -ErrorAction SilentlyContinue
-
-# 3. Puść notebooki po kolei (NB03 czyta metrics.json z NB02 — kolejność ważna)
-.venv-ml\Scripts\jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb --ExecutePreprocessor.timeout=7200 --ExecutePreprocessor.kernel_name=catan-ml
-.venv-ml\Scripts\jupyter nbconvert --to notebook --execute --inplace notebooks/02_representation_learning.ipynb --ExecutePreprocessor.timeout=7200 --ExecutePreprocessor.kernel_name=catan-ml
-.venv-ml\Scripts\jupyter nbconvert --to notebook --execute --inplace notebooks/03_vae_rssm.ipynb --ExecutePreprocessor.timeout=7200 --ExecutePreprocessor.kernel_name=catan-ml
+```bash
+uv run python -m src.train_final --families all --epochs 25 --seeds 0,1,2
 ```
 
-Notebooki:
-- `01_eda.ipynb` — analiza danych, wykresy, baseline (~5 min)
-- `02_representation_learning.ipynb` — InfoNCE / Barlow / MAE, UMAP, SHAP, McNemar (~1–2 h)
-- `03_vae_rssm.ipynb` — VAE + RSSM, ablacja β, analiza KL (~1 h)
+Wynik: `results/final_metrics.json` oraz checkpointy `results/final_*_seed*.pt`.
 
-Główne parametry `src/train_all.py`: `--subsample-games`, `--epochs`, `--batch-size`,
-`--probe-games`, `--methods` (np. `raw,random,infonce,barlow,mae,supervised`).
-Pozostałe hiperparametry: `src/config.py`.
+### Baseline heurystyczny
 
-## Uwagi
+```bash
+uv run python -m src.baseline_heuristic
+```
 
-- Generowanie jest deterministyczne (`random.seed(game_id)` per gra).
-- Klasy są skrajnie niezbalansowane — przy treningu stosować class weights /
-  weighted sampling, dla rzadkich kart uśredniać F1 po seedach.
+Wynik: `results/baseline_metrics.json`, w strukturze zgodnej z `final_metrics.json`.
+
+### Wcześniejsza ścieżka Transformer SSL
+
+```bash
+uv run python -m src.train_all
+# smoke test: uv run python -m src.train_all --subsample-games 300 --epochs 2 --probe-games 200
+```
+
+Wynik: `results/metrics.json`, `results/losses.json`, `results/encoder_*.pt`.
+
+## Notebooki
+
+Notebooki najlepiej uruchamiać z kernelu środowiska `uv`:
+
+```bash
+uv run python -m ipykernel install --user --name catan-rl --display-name "catan-rl"
+uv run jupyter lab
+```
+
+| Notebook | Rola |
+|---|---|
+| `notebooks/01_eda.ipynb` | EDA: rozkład klas, `rounds_held`, sygnały robbera, pomocniczy baseline logistyczny |
+| `notebooks/02_representation_learning.ipynb` | Transformer SSL: InfoNCE, Barlow Twins, MAE, probe, UMAP/SHAP |
+| `notebooks/03_vae_rssm.ipynb` | VAE/RSSM, krzywe uczenia, niepewność, β-sweep |
+| `notebooks/04_final_report.ipynb` | Agregacja finalnych wyników i figur porównawczych |
+| `notebooks/05_project_summary.ipynb` | Samodzielne sprawozdanie końcowe zgodne z poleceniem projektu |
+
+Przykład wykonania notebooka przez `uv`:
+
+```bash
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/05_project_summary.ipynb --ExecutePreprocessor.timeout=7200
+```
+
+## Uwagi metodologiczne
+
+- W propozycji projektu zapisano zadanie 4-klasowe; finalna implementacja jest 5-klasowa,
+  bo rozdziela `MONOPOLY` i `YEAR_OF_PLENTY` zgodnie z pełną talią Catan.
+- `data/` i `results/` nie są commitowane do repozytorium; trzeba je wygenerować lokalnie
+  albo współdzielić osobno.
+- Ewaluacja modeli uczonych używa limitu `eval_seq_len` z konfiguracji, więc przy analizie
+  późnej fazy gry trzeba kontrolować pokrycie sekwencji.
+- Supervised warianty `*_supA/B/C` nie są tym samym protokołem co czysty frozen encoder + probe;
+  w raportach należy je interpretować jako osobną oś porównania.
+

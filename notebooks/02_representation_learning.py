@@ -213,7 +213,8 @@ savefig(fig, "fig3_per_class"); plt.show()
 # %%
 import torch
 from src.config import Config
-from src.data import CARD_FEATS, LABEL_TO_IDX, build_sequences, load_split
+from src.data import (CARD_FEATS, LABEL_TO_IDX, build_sequences,
+                      filter_to_turn_starts, load_split)
 from src.models import SeqTransformerEncoder
 from src.probe import extract_card_embeddings
 
@@ -243,6 +244,7 @@ def prep(encoder, split, n_games, causal, seed):
         rng = np.random.default_rng(seed)
         keep = set(rng.choice(ts.game_id.unique(), n_games, replace=False))
         ts = ts[ts.game_id.isin(keep)]; card = card[card.game_id.isin(keep)]
+    card = filter_to_turn_starts(card, ts)
     seqs = build_sequences(ts, spec, subsample_games=0)
     needed = {}
     for r in card[["game_id", "observed_color", "action_index"]].itertuples(index=False):

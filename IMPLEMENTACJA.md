@@ -1,235 +1,306 @@
-# Implementacja — generowanie i przygotowanie danych
+# Implementacja — dane, modele i ewaluacja
 
-Dokumentacja decyzji implementacyjnych dotyczących zbioru danych do uczenia
-reprezentacji stanu przekonań o ukrytych kartach development w Catan.
+Dokumentacja decyzji implementacyjnych projektu uczenia reprezentacji stanu przekonań
+o ukrytych kartach development w Catanie. Opis dotyczy aktualnego pipeline'u v2:
+`generate_dataset_v2.py` → `verify_dataset.py` → `split_dataset.py` → trening i ewaluacja w `src/`.
 
 ## Środowisko
 
-- **Symulator:** `catanatron` zainstalowany **z repozytorium GitHub**, nie z PyPI.
-  Wersja z pip (3.2.1) zawiera tylko słabe boty. Silne boty (`AlphaBetaPlayer`,
-  `ValueFunctionPlayer`, `MCTSPlayer`, `GreedyPlayoutsPlayer`) są wyłącznie w repo.
-  ```bash
-  git clone https://github.com/bcollazo/catanatron.git
-  cd catan-representation-learning
-  uv pip install -e ../catanatron     # lub: source .venv/bin/activate && uv pip install -e ../catanatron
-  uv add pandas pyarrow
-  ```
-- **Python:** wymagane 3.11+ (poprawić `requires-python` w `pyproject.toml` na `>=3.11`).
-- **Menedżer pakietów:** `uv`.
-- **Generowanie jest CPU-bound** — GPU nie pomaga. Zrównoleglone przez
-  `multiprocessing` na wszystkich rdzeniach. 10k gier ≈ 1–2 h lokalnie zależnie
-  od wag silnych botów. Chmura niepotrzebna.
+Całe środowisko jest zarządzane przez **uv**.
 
-## Skład stołu (BOT_POOL) i obserwowani gracze
+```bash
+# catanatron musi leżeć obok repozytorium projektu
+cd ..
+git clone https://github.com/bcollazo/catanatron.git
+cd catan-representation-learning
 
-- **Rozwiązanie A — losowy skład stołu** (realizm). Dla każdej gry losujemy 4 boty
-  z powtórzeniami z ważonej puli.
-- **Obserwowani** (gracze, których karty przewidujemy) = **tylko silne boty**:
-  `ValueFunction`, `AlphaBeta`, `MCTS`. Słabe boty grają losowo → ich użycie kart
-  to szum.
-- **Wszystkie silne boty przy stole = osobne perspektywy** z jednej gry (więcej
-  danych bez dodatkowej symulacji). Perspektywy tej samej gry trafiają do tego
-  samego splitu.
-- Win-rate (kontrola jakości, 50 gier): ValueFunction ~52%, AlphaBeta ~43%,
-  MCTS ~14%, reszta <8% (poziom losowy dla 4 graczy = 25%).
-- Czas/gra zależy DRASTYCZNIE od składu: 4×WeightedRandom ~0.04 s,
-  4×ValueFunction ~1 s, stół z AlphaBeta ~11 s. Wagi MCTS/AlphaBeta strojone pod
-  budżet czasowy.
+# instalacja zależności z pyproject.toml / uv.lock
+uv sync
 
-## Struktura wyjściowa — dwie powiązane tabele
+# opcjonalne zależności notebookowe
+uv sync --extra notebooks
+```
 
-Generowane w chunkach (pliki `*_{start}_to_{end}.parquet`), scalane przez glob.
+W `pyproject.toml` zależność `catanatron` jest wskazana jako lokalne źródło editable:
+`../catanatron`. Korzystamy z wersji z GitHuba, ponieważ silne boty (`AlphaBetaPlayer`,
+`ValueFunctionPlayer`, `MCTSPlayer`) nie są dostępne w pakiecie PyPI.
 
-### `timesteps.parquet` — sekwencja per akcja
-Wejście dla VAE-LSTM / RSSM. **Jeden wiersz = jeden krok (gra × perspektywa × akcja)**.
-Zawiera WSZYSTKIE kroki, też te z 0 kartami na ręce (sekwencja musi być pełna).
-Wiersz zapisywany po **każdej akcji w grze**, niezależnie od tego kto ją wykonał
-(~27% kroków to tury obserwowanego, reszta to ruchy przeciwników).
+Generowanie danych jest CPU-bound. GPU jest potrzebne dopiero przy większych treningach
+modeli, zwłaszcza finalnym `src.train_final`.
 
-### `card_samples.parquet` — próbki per-karta
-Cel: **5-klasowa klasyfikacja typu karty** (softmax). **Jedna próbka = jedna
-pojedyncza karta trzymana w danym kroku.** Łączy się z `timesteps` po kluczu
-`(game_id, observed_color, action_index)`.
+## Skład stołu i wybór perspektywy
 
-## Wektor obserwacji (cechy wejściowe)
+Każda gra losuje czterech graczy z ważonej puli `BOT_POOL` w `generate_dataset_v2.py`:
+`Random`, `WeightedRandom`, `VictoryPoint`, `ValueFunction`, `AlphaBeta`, `MCTS`.
 
-Gracze ułożeni **względem obserwowanego**: `p0` = obserwowany, `p1..p3` = przeciwnicy.
-Dla każdego z 4 graczy (cechy JAWNE, widoczne dla każdego):
-- `p{i}_total_resources` — suma kart zasobów (liczba jawna, rozbicie ukryte)
-- `p{i}_n_dev_in_hand` — suma kart development (liczba jawna, rozbicie = target)
-- `p{i}_public_vp` — publiczne punkty (`VICTORY_POINTS`, **NIE** `ACTUAL_VICTORY_POINTS`)
-- `p{i}_played_knight/monopoly/road_building/yop/vp` — zagrane karty (jawne)
-- `p{i}_has_army`, `p{i}_has_longest_road`, `p{i}_longest_road_len`
-- `p{i}_cities_built`, `p{i}_settlements_built`, `p{i}_roads_built`
-- `p{i}_is_current` — czy jego tura
+Obserwowanym graczem może być tylko silny bot z `OBSERVABLE_TYPES`:
+`ValueFunction`, `AlphaBeta`, `MCTS`. Jeśli wylosowany stół nie zawiera żadnego takiego
+bota, gra jest pomijana.
 
-Globalne:
-- `action_*` — one-hot typu wykonanej akcji (+ `action_OTHER`)
-- `robber_on_observed` — czy złodziej blokuje obserwowanego (kluczowy sygnał)
-- `num_turns` — postęp gry
+Aktualna decyzja v2: **dokładnie jedna perspektywa na grę**. Spośród silnych botów przy
+stole losowany jest jeden `observed_color`. Ogranicza to korelację między próbkami z tej
+samej rozgrywki i upraszcza split per gra. Starszy wariant „wszystkie silne boty jako
+osobne perspektywy” nie jest już używany w generatorze v2.
 
-Historia obserwowanego (sygnał stanowy):
-- `obs_rounds_since_buy`, `obs_rounds_since_play` — ile akcji od ostatniego kupna/zagrania
-- `obs_total_dev_bought`, `obs_total_dev_played`
-- `n_hidden_cards` — liczba kart na ręce obserwowanego
-- `is_observed_turn_start` — flaga początku tury obserwowanego (do filtrowania
-  punktów ewaluacji)
+## Struktura wyjściowa danych
 
-## Maskowanie (brak wycieku targetu)
+Generator zapisuje dane w chunkach parquet.
 
-Do cech wejściowych **NIE wchodzi**:
-- rozbicie kart development obserwowanego na typy (tylko suma `n_dev_in_hand`),
-- rozbicie zasobów żadnego gracza (tylko sumy),
-- `ACTUAL_VICTORY_POINTS` (zawiera ukryte karty VP — wyciek!).
+### `timesteps_*.parquet`
 
-Gwarancja maskowania: `p0_n_dev_in_hand == suma y_*` (sprawdzane w weryfikacji).
+Jeden wiersz to jeden krok gry z perspektywy obserwowanego gracza:
+`(game_id, observed_color, action_index)`. Tabela zawiera pełną sekwencję akcji, także
+kroki, w których obserwowany gracz nie ma ukrytych kart development. Modele sekwencyjne
+potrzebują pełnego kontekstu historii, nie tylko kroków z targetem.
 
-## Target — próbki per-karta
+### `card_samples_*.parquet`
 
-W `card_samples.parquet`:
-- `label` — prawdziwy typ karty (5 klas: KNIGHT, VICTORY_POINT, ROAD_BUILDING,
-  MONOPOLY, YEAR_OF_PLENTY)
-- `rounds_held` — ile akcji karta jest trzymana (**najsilniejszy sygnał**: karty
-  VP trzymane długo — mediana ~95 akcji — vs rycerze zagrywani szybko ~8 akcji)
-- `bought_at_action`, `card_slot`, `n_hidden_cards`, `is_observed_turn_start`
+Jeden wiersz to jedna konkretna karta development trzymana przez obserwowanego gracza w
+danym kroku. Tabela łączy się z `timesteps` po `(game_id, observed_color, action_index)`.
+Targetem jest `label`, czyli 5-klasowy typ karty:
 
-Tabela `timesteps` ma też kolumny licznościowe `y_knight … y_year_of_plenty`
-(liczba kart każdego typu) — przydatne do alternatywnych analiz.
+- `KNIGHT`
+- `VICTORY_POINT`
+- `ROAD_BUILDING`
+- `MONOPOLY`
+- `YEAR_OF_PLENTY`
 
-## Mechanika catanatron — pułapki
+To świadome odejście od pierwotnego opisu 4-klasowego: finalny dataset rozdziela
+`MONOPOLY` i `YEAR_OF_PLENTY`, bo są odrębnymi kartami i mają różne konsekwencje w grze.
 
-- **Tasowanie graczy:** `P0..P3` w `player_state` NIE odpowiadają kolejności
-  tworzenia graczy. Jedyne źródło prawdy to `state.color_to_index`
-  (np. `{WHITE:0, RED:1, ORANGE:2, BLUE:3}`). Perspektywa identyfikowana
-  **kolorem**, P-index wyznaczany przez `color_to_index[kolor]`. Pomylenie tego
-  to cichy wyciek (czytanie kart innego gracza).
-- **Typ kupionej karty:** w hooku `step()` na żywo `action.value=None`.
-  Rozstrzygnięty typ jest dopiero w `state.action_records` PO grze
-  (`BUY_DEVELOPMENT_CARD.value == 'KNIGHT'` itd.) — stąd dołączany po grze.
-- **Zagrania:** typ zagranej karty wynika z nazwy akcji (`PLAY_KNIGHT_CARD` itd.).
-  Karty VP nigdy nie są zagrywane (zostają na ręce do końca).
-- **Złodziej:** `board.robber_coordinate` → `board.map.tiles[coord].nodes`
-  (6 węzłów) → `board.buildings[node_id] = (kolor, typ)`. Blokada obserwowanego
-  występuje w ~20–35% kroków i koreluje z targetem (zablokowany + nie zagrał
-  rycerza → niższe P(rycerz): ~1.4% vs ~6.3%).
-- **Powtarzalność:** boty używają GLOBALNEGO `random`, nie lokalnego. W każdej
-  grze ustawiane `random.seed(game_id)` dla determinizmu.
+## Wektor obserwacji
 
-## Gwarancja poprawności (reconciliation)
+Gracze są indeksowani relatywnie do obserwowanego:
 
-W każdym kroku śledzona ręka (rekonstruowana z zakupów/zagrań) MUSI zgadzać się
-z `IN_HAND` z `player_state` (assert w generatorze). To gwarantuje poprawność
-labeli per-karta — assert złapał błąd mapowania kolorów.
+- `p0` — obserwowany gracz,
+- `p1..p3` — pozostali gracze w stałej kolejności względem mapowania kolorów `catanatron`.
 
-## Split train / val / test (bez wycieku)
+Dla każdego gracza zapisujemy wyłącznie publiczne cechy, m.in.:
 
-**Asymetryczny, kryterium = obecność MCTS w SKŁADZIE STOŁU (kolumna `table`),
-NIE `observed_type`:**
-- **train / val** — WYŁĄCZNIE gry bez żadnego MCTS przy stole
-- **test** — wszystkie gry z MCTS (niewidziany styl, `test_kind='unseen_mcts'`)
-  + część czystych gier (widziany styl, `test_kind='seen'`)
+- `p{i}_total_resources` — suma zasobów, bez rozbicia na typy,
+- `p{i}_n_dev_in_hand` — liczba kart development na ręce, bez rozbicia na typy,
+- `p{i}_public_vp` — publiczne punkty, nie `ACTUAL_VICTORY_POINTS`,
+- zagrane typy kart development,
+- największą armię, najdłuższą drogę, liczbę miast, osad i dróg,
+- `p{i}_is_current` — informację, czy to aktualny gracz.
 
-Split **per gra** — obie tabele dzielone tym samym podziałem `game_id`, więc
-skorelowane wiersze (perspektywy, karty, kolejne akcje) nie przeciekają między
-zbiorami. Ewaluacja raportowana osobno dla widzianego i niewidzianego stylu.
+Cechy globalne i historyczne obejmują m.in.:
 
-> MCTS jako przeciwnik pojawia się dużo częściej niż jako obserwowany — przy
-> izolacji znaczna część gier wylatuje z treningu do testu. Wagę MCTS w puli
-> dobierać tak, by nie tracić zbyt wielu gier treningowych.
+- `action_*` — one-hot typu wykonanej akcji,
+- `robber_on_observed`,
+- `num_turns`,
+- `bank_*`,
+- `played_*_total`,
+- `dev_deck_remaining`,
+- `obs_rounds_since_buy`, `obs_rounds_since_play`,
+- `obs_total_dev_bought`, `obs_total_dev_played`,
+- `n_hidden_cards`,
+- `is_observed_turn_start`.
+
+`src.data.feature_columns()` automatycznie wybiera numeryczne kolumny wejściowe, odrzucając
+meta-kolumny i targety `y_*`.
+
+## Brak wycieku targetu
+
+Do cech wejściowych modeli nie trafiają:
+
+- rozbicie ukrytych kart development obserwowanego na typy,
+- `ACTUAL_VICTORY_POINTS`, które ujawnia ukryte VP,
+- rozbicie zasobów żadnego gracza,
+- targety pomocnicze `y_knight`, `y_victory_point`, `y_road_building`, `y_monopoly`, `y_year_of_plenty`.
+
+Generator śledzi rękę obserwowanego gracza na podstawie zakupów i zagrań kart. W każdym
+kroku porównuje zrekonstruowaną rękę z `IN_HAND` z `catanatron`; niezgodność kończy się
+assertem. Ten mechanizm złapał wcześniej błędy mapowania kolorów.
+
+## Mechanika catanatron — ważne pułapki
+
+- `P0..P3` w `player_state` nie odpowiadają kolejności tworzenia graczy. Źródłem prawdy
+  jest `state.color_to_index`.
+- Typ kupionej karty nie jest dostępny bezpośrednio w hooku `step()`; jest odczytywany po
+  grze z `state.action_records`.
+- Typ zagranej karty wynika z nazwy akcji (`PLAY_KNIGHT_CARD`, `PLAY_MONOPOLY`, itd.).
+- Karty VP nigdy nie są zagrywane, dlatego długi czas trzymania jest silnym sygnałem VP.
+- Boty używają globalnego `random`, więc przed każdą grą ustawiamy `random.seed(game_id)`.
+
+## Split train / val / test
+
+Split jest wykonywany per `game_id`, wspólnie dla `timesteps` i `card_samples`.
+
+Kryterium testu generalizacji to obecność MCTS w składzie stołu (`table`), a nie tylko
+`observed_type`:
+
+- **train / val** — gry bez żadnego MCTS przy stole,
+- **test unseen_mcts** — wszystkie gry z MCTS przy stole,
+- **test seen** — część gier bez MCTS, zostawiona jako znany styl w teście.
+
+Dzięki temu test mierzy zarówno standardową generalizację, jak i odporność na niewidziany
+styl gry.
 
 ## Niezbalansowanie klas
 
-Rozkład typów kart jest skrajny (VICTORY_POINT dominuje, MONOPOLY i
-YEAR_OF_PLENTY <1%). Konsekwencje:
-- metryka: **F1 per typ** (accuracy myli przy niezbalansowaniu),
-- przy treningu: **balansowanie klas** (class weights / weighted sampling),
-- dla rzadkich kart **uśredniać F1 po kilku seedach** (niestabilne).
+Rozkład kart development jest silnie niezbalansowany: `VICTORY_POINT` i `KNIGHT` dominują,
+a `MONOPOLY` oraz `YEAR_OF_PLENTY` są rzadkie. Dlatego:
 
-## Pipeline — kolejność uruchamiania
+- główną metryką jest **macro-F1**,
+- raportujemy F1 per klasa,
+- probe i warianty nadzorowane używają mechanizmów ważenia klas,
+- wyniki finalne uśredniamy po seedach, jeśli dostępne.
+
+## Przygotowanie danych — komendy
 
 ```bash
-# 1. Generowanie (chunki, równolegle)
+# 1. Generowanie danych
 uv run generate_dataset_v2.py --num 10000 --out-dir data --workers 16 --chunk-size 1000
 
-# 2. Weryfikacja (15 checków: integralność, brak wycieku, spójność tabel, split)
+# 2. Weryfikacja integralności i braku przecieku
 uv run verify_dataset.py --data-dir data
 
-# 3. Podział na train/val/test (izolacja MCTS, per gra)
+# 3. Split train/val/test
 uv run split_dataset.py --data-dir data --out-dir data/splits
-# -> {train,val,test}_{timesteps,card_samples}.parquet
 ```
 
-## Środowisko modelowe (osobne od generatora)
+Wynikiem splitu są pliki:
 
-Część modelowa (analiza + uczenie reprezentacji) ma **własny venv `.venv-ml` na
-Pythonie 3.12** — PyTorch nie ma jeszcze wheeli na zainstalowanego systemowo
-Pythona 3.14. `catanatron` w tej części jest niepotrzebny (dane są gotowe), więc
-środowisko jest lekkie (`requirements-ml.txt`: torch CPU, pandas, pyarrow,
-scikit-learn, matplotlib, seaborn, jupyter):
+```text
+data/splits/train_timesteps.parquet
+data/splits/train_card_samples.parquet
+data/splits/val_timesteps.parquet
+data/splits/val_card_samples.parquet
+data/splits/test_timesteps.parquet
+data/splits/test_card_samples.parquet
+```
+
+## Implementacja modeli (`src/`)
+
+### Warstwa danych
+
+`src.data` odpowiada za:
+
+- wczytywanie splitów,
+- budowę sekwencji `(game_id, observed_color)`,
+- standaryzację cech ciągłych na statystykach TRAIN,
+- wykrywanie kolumn binarnych,
+- filtrowanie próbek do startów tur (`compute_turn_starts`, `filter_to_turn_starts`),
+- doklejanie jawnych cech per karta (`CARD_FEATS`) podczas probe.
+
+### VAE-LSTM
+
+`src.ssl_vae` implementuje `SeqVAE`:
+
+- LSTM jako enkoder sekwencji,
+- latent Gaussowski (`vae`) albo kategoryczny (`vae_cat`),
+- dekoder MLP rekonstruujący wektor obserwacji,
+- strata rekonstrukcji + `β * KL`,
+- β-annealing przez pierwsze epoki.
+
+W probe używany jest deterministyczny embedding: `mu_t` dla wariantu Gaussowskiego albo
+prawdopodobieństwa klas latentnych dla wariantu kategorycznego.
+
+### RSSM
+
+`src.ssl_rssm` implementuje RSSM w stylu Dreamer/PlaNet:
+
+- embedding obserwacji,
+- deterministyczny stan `h_t` aktualizowany przez `GRUCell`,
+- stochastyczny latent `z_t`,
+- prior `p(z_t | h_t)` i posterior `q(z_t | h_t, x_t)`,
+- dekoder rekonstruujący obserwację,
+- KL posterior-prior.
+
+Wariant kategoryczny używa KL balancing i free bits. Embedding do probe to konkatenacja
+`[h_t || z_t]`.
+
+### Transformer SSL
+
+Dodatkowa ścieżka `src.train_all` korzysta z `SeqTransformerEncoder` i trzech obiektywów:
+
+- `src.ssl_infonce` — InfoNCE / CPC,
+- `src.ssl_barlow` — Barlow Twins,
+- `src.ssl_mae` — Transformer MAE.
+
+Ta część jest punktem odniesienia, ale finalna hipoteza projektu dotyczy głównie VAE-LSTM
+kontra RSSM.
+
+### Supervised warianty A/B/C
+
+`src.supervised_seq` implementuje dodatkowe warianty nadzorowane dla VAE/RSSM:
+
+- **A** — zamrożony encoder SSL + głowica MLP,
+- **B** — end-to-end CE + KL,
+- **C** — end-to-end CE + KL + rekonstrukcja.
+
+Nie należy ich interpretować jako ten sam protokół co frozen encoder + linear probe.
+Są dodatkowym punktem odniesienia dla pytania, ile daje wykorzystanie etykiet podczas treningu.
+
+## Baseline
+
+Finalny baseline to `src.baseline_heuristic`, czyli nieuczony system reguł. Startuje od
+priora składu talii development i nakłada multiplikatywne korekty:
+
+- długie trzymanie karty zwiększa prior `VICTORY_POINT`, bo VP nie da się zagrać,
+- blokada złodziejem bez zagrania rycerza zmniejsza prior `KNIGHT`,
+- nadmiar zasobów bez zagrania karty zmniejsza priory `ROAD_BUILDING` i `YEAR_OF_PLENTY`,
+- niski stan banku zasobu jest proxy dla okazji do monopolu i wpływa na `MONOPOLY`.
+
+Parametry są ręcznie ustawione w `HeuristicParams`; baseline nie uczy się na danych.
+Wynik zapisywany jest do `results/baseline_metrics.json` w strukturze zgodnej z
+`results/final_metrics.json`.
 
 ```bash
-python -m pip install uv
-python -m uv venv .venv-ml --python 3.12
-python -m uv pip install --python .venv-ml -r requirements-ml.txt
+uv run python -m src.baseline_heuristic
 ```
 
-Pliki `verify_dataset.py` i `split_dataset.py` to czysty pandas/numpy — działają
-w `.venv-ml`.
+Logistic regression z `notebooks/01_eda.ipynb` jest pomocniczym baseline'em analitycznym
+na prostych cechach per karta, ale nie jest finalnym baseline'em projektu.
 
-## Uczenie reprezentacji — implementacja (`src/`)
+## Search i finalny trening
 
-Wspólny backbone **Transformer** (`src/models.py`: `SeqTransformerEncoder`)
-z **sinusoidalnym kodowaniem pozycji indeksowanym `action_index`** — model uczony
-na oknach długości 256 działa na pełnych sekwencjach (do ~673 kroków) przy
-ekstrakcji embeddingów. Jednostka sekwencji: `(game_id, observed_color)` sortowana
-po `action_index`. Wejście = 82 cechy numeryczne (bez meta i bez `y_*`).
-Standaryzacja cech ciągłych na statystykach TRAIN; kolumny binarne (one-hoty,
-flagi) wykrywane automatycznie (`src/data.py: fit_feature_spec`).
-
-Trzy **samonadzorowane** obiektywy na tym samym backbone:
-- **InfoNCE / CPC** (`src/ssl_infonce.py`) — enkoder causal, predyktory liniowe
-  przewidują reprezentacje przyszłych kroków `t+k`; strata InfoNCE z negatywami
-  w batchu. Uczy **dynamiki** gry.
-- **Barlow Twins** (`src/ssl_barlow.py`) — dwa augmentowane widoki okna
-  (`src/augment.py`: feature-dropout, szum na cechach ciągłych, time-dropout),
-  strata krzyżowej korelacji → macierz jednostkowa. Uczy **niezmienniczości**.
-- **Transformer MAE** (`src/ssl_mae.py`) — maskowanie ~30% kroków i rekonstrukcja
-  ich cech (MSE dla ciągłych + BCE dla binarnych). Uczy **struktury** kroku.
-
-**Ewaluacja — linear probe** (`src/probe.py`): enkoder zamrożony → embedding kroku
-w pozycji karty + jawne cechy per-karta → regresja logistyczna
-(`class_weight='balanced'`). Metryka: **macro-F1 + F1 per klasa**, raportowane
-osobno dla `test_kind ∈ {seen, unseen_mcts}`. Punkty odniesienia: `raw` (bez
-enkodera), `random` (enkoder nieuczony), `supervised` (`src/supervised.py`, górna
-granica end-to-end z etykietami).
-
-Orkiestracja: `src/train_all.py` (CLI) — pretrening wszystkich metod + probe +
-zapis `results/metrics.json`, `results/losses.json`, `results/encoder_*.pt`.
-Hiperparametry CPU-friendly: `src/config.py`. Domyślnie podpróbkowanie gier
-(`--subsample-games`) i okno 256 kroków, bo generowanie jest CPU-bound.
+### Search na VAL
 
 ```bash
-# pretrening 3 metod SSL + baseline'y + probe (CPU)
-.venv-ml/Scripts/python -m src.train_all
-#   smoke test: --subsample-games 300 --epochs 2 --probe-games 200
+uv run python -m src.search --subsample-games 1500 --epochs 8 --probe-games 1200
 ```
 
-## Notebooki
+`src.search` trenuje kuratorowaną przestrzeń konfiguracji VAE/RSSM i supervised A/B/C,
+ocenia na VAL i zapisuje `results/search_results.json`.
 
-- `notebooks/01_eda.ipynb` — analiza danych (rozkłady klas, `rounds_held`,
-  robber↔rycerz, długości sekwencji, postęp gry) + baseline regresji logistycznej.
-- `notebooks/02_representation_learning.ipynb` — porównanie InfoNCE / Barlow Twins
-  / Transformer MAE: krzywe strat, macro-F1 (seen vs unseen), F1 per klasa, t-SNE
-  embeddingów. Wymaga wcześniejszego `src/train_all.py`.
+### Final na TEST
 
-## Modele zespołu (równoległe ścieżki)
+```bash
+uv run python -m src.train_final --families all --epochs 25 --seeds 0,1,2
+```
 
-- **Baseline** (wspólny): reguły dziedzinowe + logistic regression na ręcznych
-  cechach (`rounds_held`, kontekst surowcowy, `robber_on_observed`).
-- **Osoba 1:** VAE z enkoderem LSTM (okno historii) + badanie hiperparametru β.
-- **Osoba 2:** RSSM (Hafner et al. 2019, podstawowy z Dreamera, NIE HiP-RSSM)
-  — inkrementalna agregacja stanu przez całą grę.
-- **Ścieżka SSL** (powyżej): InfoNCE / Barlow Twins / Transformer — alternatywne,
-  samonadzorowane reprezentacje oceniane tym samym protokołem probe.
-- Wejście modeli: sekwencja z `timesteps` (grupować po `game_id, observed_color`,
-  sortować po `action_index`). Predykcja: 5-klasowa per karta z `card_samples`.
+`src.train_final` bierze najlepsze konfiguracje z searcha, trenuje je na pełniejszym
+budżecie i zapisuje:
+
+- `results/final_metrics.json`,
+- `results/final_<family>_seed<n>.pt`.
+
+## Notebooki i raportowanie
+
+| Notebook | Rola |
+|---|---|
+| `01_eda.ipynb` | analiza danych, rozkłady, sygnały domenowe, pomocniczy baseline logistyczny |
+| `02_representation_learning.ipynb` | Transformer SSL i porównania probe |
+| `03_vae_rssm.ipynb` | VAE/RSSM, analiza niepewności, β-sweep |
+| `04_final_report.ipynb` | agregacja wyników finalnych i figur |
+| `05_project_summary.ipynb` | samodzielne sprawozdanie końcowe zgodne z poleceniem |
+
+Uruchamianie przez `uv`:
+
+```bash
+uv run python -m ipykernel install --user --name catan-rl --display-name "catan-rl"
+uv run jupyter lab
+
+# albo batchowo
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/05_project_summary.ipynb --ExecutePreprocessor.timeout=7200
+```
+
+## Znane ograniczenia
+
+- `data/` i `results/` nie są commitowane; notebooki wynikowe wymagają lokalnego odtworzenia artefaktów.
+- Ewaluacja embeddingów jest ograniczona przez `eval_seq_len`; przy analizie późnej fazy gry trzeba kontrolować pokrycie sekwencji.
+- Rzadkie klasy mają szeroką wariancję F1, więc pojedyncze uruchomienia mogą być mylące.
+- Własny dataset nie ma zewnętrznego state of the art; porównanie odbywa się względem baseline'u heurystycznego i wewnętrznych punktów odniesienia.
+
