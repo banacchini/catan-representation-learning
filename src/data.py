@@ -23,8 +23,42 @@ TARGET_COLS = ["y_knight", "y_victory_point", "y_road_building",
 LABELS = ["KNIGHT", "VICTORY_POINT", "ROAD_BUILDING", "MONOPOLY", "YEAR_OF_PLENTY"]
 LABEL_TO_IDX = {l: i for i, l in enumerate(LABELS)}
 # jawne cechy per-karta doklejane do embeddingu w probe (NIE sa wyciekiem typu)
+# current_rel_pos = ktorego gracza tura sie rozpoczyna (0 = obserwowany, 1..3 = przeciwnicy);
+# zastapilo is_observed_turn_start, bo ewaluacja zachodzi teraz TYLKO na starcie kazdej tury
+# (is_observed_turn_start == (current_rel_pos == 0)).
 CARD_FEATS = ["rounds_held", "card_slot", "n_hidden_cards", "bought_at_action",
-              "is_observed_turn_start"]
+              "current_rel_pos"]
+
+# kolumny one-hot wskazujace biezacego gracza (rel_pos): p0=obserwowany .. p3
+IS_CURRENT_COLS = ["p0_is_current", "p1_is_current", "p2_is_current", "p3_is_current"]
+
+
+def compute_turn_starts(ts_df):
+    """Zwraca DataFrame[game_id, observed_color, action_index, current_rel_pos]
+    zawierajacy TYLKO wiersze bedace poczatkiem tury DOWOLNEGO gracza.
+
+    Poczatek tury = pierwszy krok sekwencji LUB krok, w ktorym biezacy gracz
+    (argmax po p{rel}_is_current) rozni sie od gracza z poprzedniego kroku.
+    Sekwencja = (game_id, observed_color) posortowana po action_index.
+    """
+    df = ts_df[["game_id", "observed_color", "action_index"] + IS_CURRENT_COLS].copy()
+    df = df.sort_values(["game_id", "observed_color", "action_index"])
+    # ktorego gracza (rel_pos) tura: argmax po one-hotach is_current
+    cur = df[IS_CURRENT_COLS].to_numpy().argmax(axis=1)
+    df["current_rel_pos"] = cur.astype(np.int64)
+    grp = df.groupby(["game_id", "observed_color"], sort=False)["current_rel_pos"]
+    prev = grp.shift(1)
+    is_start = prev.isna() | (df["current_rel_pos"] != prev)
+    out = df.loc[is_start, ["game_id", "observed_color", "action_index", "current_rel_pos"]]
+    return out.reset_index(drop=True)
+
+
+def filter_to_turn_starts(card_df, ts_df):
+    """Zaweza card_df do probek na starcie tury dowolnego gracza i dokleja
+    current_rel_pos (z compute_turn_starts). Zwraca nowy DataFrame."""
+    starts = compute_turn_starts(ts_df)
+    key = ["game_id", "observed_color", "action_index"]
+    return card_df.merge(starts, on=key, how="inner")
 
 
 def feature_columns(df):

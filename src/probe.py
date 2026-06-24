@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 
 from .data import (CARD_FEATS, LABEL_TO_IDX, LABELS, SeqDataset, build_sequences,
-                   collate, load_split)
+                   collate, filter_to_turn_starts, load_split)
 
 
 def run_raw_baseline(spec, cfg, log=print, n_train_games=1500, n_test_games=1500,
@@ -33,6 +33,8 @@ def run_raw_baseline(spec, cfg, log=print, n_train_games=1500, n_test_games=1500
             rng = np.random.default_rng(seed)
             keep = set(rng.choice(ts["game_id"].unique(), n_games, replace=False))
             ts = ts[ts["game_id"].isin(keep)]; card = card[card["game_id"].isin(keep)]
+        # ewaluacja TYLKO na starcie tury dowolnego gracza (+ dokleja current_rel_pos)
+        card = filter_to_turn_starts(card, ts)
         key = ["game_id", "observed_color", "action_index"]
         m = card.merge(ts[key + feat_cols], on=key, how="inner", suffixes=("_card", ""))
         Xr = spec.transform(m[feat_cols].to_numpy(dtype=np.float32))
@@ -88,10 +90,12 @@ def extract_card_embeddings(encoder, seqs, needed, cfg, device, causal):
     return out
 
 
-def _assemble(card_df, emb, card_scaler=None, emb_dim=None):
-    """Buduje macierz X = [embedding | cechy per-karta] i wektor y."""
-    rows_emb, rows_card, ys, kinds = [], [], [], []
+def _assemble_full(card_df, emb):
+    """Jak _assemble, ale zwraca tez wektor observed_type (do rozbicia per algorytm).
+    Returns (X, y, kinds, otypes)."""
+    rows_emb, rows_card, ys, kinds, otypes = [], [], [], [], []
     has_kind = "test_kind" in card_df.columns
+    has_ot = "observed_type" in card_df.columns
     for r in card_df.itertuples(index=False):
         key = (int(r.game_id), str(r.observed_color), int(r.action_index))
         e = emb.get(key)
@@ -101,11 +105,18 @@ def _assemble(card_df, emb, card_scaler=None, emb_dim=None):
         rows_card.append([getattr(r, c) for c in CARD_FEATS])
         ys.append(LABEL_TO_IDX[r.label])
         kinds.append(getattr(r, "test_kind", "-") if has_kind else "-")
+        otypes.append(getattr(r, "observed_type", "-") if has_ot else "-")
     E = np.asarray(rows_emb, dtype=np.float32)
     C = np.asarray(rows_card, dtype=np.float32)
     X = np.concatenate([E, C], axis=1)
     y = np.asarray(ys, dtype=np.int64)
-    return X, y, np.asarray(kinds)
+    return X, y, np.asarray(kinds), np.asarray(otypes)
+
+
+def _assemble(card_df, emb, card_scaler=None, emb_dim=None):
+    """Buduje macierz X = [embedding | cechy per-karta] i wektor y."""
+    X, y, kinds, _ = _assemble_full(card_df, emb)
+    return X, y, kinds
 
 
 def _f1_report(y_true, y_pred):
@@ -117,10 +128,24 @@ def _f1_report(y_true, y_pred):
             "per_class_f1": {LABELS[i]: float(per[i]) for i in range(5)}}
 
 
+def _grouped_report(y_true, y_pred, groups):
+    """Macro-F1 per wartosc w `groups` (np. observed_type / test_kind)."""
+    out = {}
+    for g in sorted(set(groups.tolist())):
+        m = groups == g
+        if m.sum() > 0:
+            rep = _f1_report(y_true[m], y_pred[m])
+            rep["n"] = int(m.sum())
+            out[str(g)] = rep
+    return out
+
+
 def run_probe(encoder, spec, cfg, device, causal, name="",
               n_train_games=1500, n_test_games=1500, log=print,
-              max_train_samples=80000):
-    """Pelna ewaluacja: trenuje glowice na TRAIN, raportuje na TEST (seen/unseen)."""
+              max_train_samples=80000, eval_split="test"):
+    """Pelna ewaluacja: trenuje glowice na TRAIN, raportuje na `eval_split`
+    (domyslnie TEST z podzialem seen/unseen; do selekcji modeli uzyj 'val').
+    Ewaluacja TYLKO na starcie tury dowolnego gracza, per karta."""
     def prep(split, n_games, seed):
         ts = load_split(cfg.data_dir, split, "timesteps")
         card = load_split(cfg.data_dir, split, "card_samples")
@@ -129,21 +154,23 @@ def run_probe(encoder, spec, cfg, device, causal, name="",
             keep = set(rng.choice(ts["game_id"].unique(), n_games, replace=False))
             ts = ts[ts["game_id"].isin(keep)]
             card = card[card["game_id"].isin(keep)]
+        # ewaluacja TYLKO na starcie tury dowolnego gracza (+ dokleja current_rel_pos)
+        card = filter_to_turn_starts(card, ts)
         seqs = build_sequences(ts, spec, subsample_games=0)
         needed = {}
         for r in card[["game_id", "observed_color", "action_index"]].itertuples(index=False):
             needed.setdefault((int(r.game_id), str(r.observed_color)), set()).add(int(r.action_index))
         emb = extract_card_embeddings(encoder, seqs, needed, cfg, device, causal)
-        return _assemble(card, emb)
+        return _assemble_full(card, emb)
 
     log(f"  [probe:{name}] przygotowanie TRAIN...")
-    Xtr, ytr, _ = prep("train", n_train_games, cfg.seed)
+    Xtr, ytr, _, _ = prep("train", n_train_games, cfg.seed)
     if len(ytr) > max_train_samples:
         rng = np.random.default_rng(cfg.seed)
         idx = rng.choice(len(ytr), max_train_samples, replace=False)
         Xtr, ytr = Xtr[idx], ytr[idx]
-    log(f"  [probe:{name}] przygotowanie TEST...")
-    Xte, yte, kinds = prep("test", n_test_games, cfg.seed + 1)
+    log(f"  [probe:{name}] przygotowanie {eval_split.upper()}...")
+    Xte, yte, kinds, otypes = prep(eval_split, n_test_games, cfg.seed + 1)
 
     scaler = StandardScaler().fit(Xtr)
     clf = LogisticRegression(max_iter=cfg.probe_max_iter, class_weight="balanced",
@@ -158,7 +185,12 @@ def run_probe(encoder, spec, cfg, device, causal, name="",
         if m.sum() > 0:
             res[kind] = _f1_report(yte[m], pred[m])
             res[kind]["n"] = int(m.sum())
+    res["by_observed_type"] = _grouped_report(yte, pred, otypes)
+    ot = res["by_observed_type"]
     log(f"  [probe:{name}] macro-F1 all={res['all']['macro_f1']:.3f} "
         f"seen={res.get('seen', {}).get('macro_f1', float('nan')):.3f} "
         f"unseen={res.get('unseen_mcts', {}).get('macro_f1', float('nan')):.3f}")
+    if ot:
+        log("    per observed_type: " + "  ".join(
+            f"{k}={v['macro_f1']:.3f}(n={v['n']})" for k, v in ot.items()))
     return res
